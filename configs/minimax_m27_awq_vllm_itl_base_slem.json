@@ -1,0 +1,11 @@
+{
+  "target_model": "MiniMax-M2.7-AWQ-4bit",
+  "draft_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "engine": "vllm",
+  "vllm_version": "0.15.1",
+  "method": "slem",
+  "num_speculative_tokens": 5,
+  "assistant_lookbehind": 10,
+  "target_lookbehind": 10,
+  "serve_example": "vllm-itl-base-serve MiniMax-M2.7-AWQ-4bit --trust-remote-code --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct --itl-base-method slem --itl-base-num-speculative-tokens 5"
+}

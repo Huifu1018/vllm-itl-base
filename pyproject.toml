@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-itl-base"
+version = "0.1.0"
+description = "vLLM 0.15.1 integration for first-paper heterogeneous-vocabulary speculative decoding baselines."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Huifu1018" }]
+dependencies = []
+
+[project.optional-dependencies]
+vllm = [
+  "vllm==0.15.1",
+  "transformers>=4.45",
+  "torch",
+  "accelerate",
+  "sentencepiece",
+  "safetensors",
+]
+dev = ["build", "pytest"]
+
+[project.scripts]
+vllm-itl-base-serve = "vllm_itl_base.cli.serve:main"
+vllm-itl-base-preflight = "vllm_itl_base.cli.preflight:main"
+
+[project.entry-points."vllm.general_plugins"]
+vllm_itl_base = "vllm_itl_base.vllm.plugin:activate"
+
+[tool.setuptools.packages.find]
+include = ["vllm_itl_base*"]
