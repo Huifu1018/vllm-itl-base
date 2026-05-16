@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 ITL_BASE_ALGORITHM = "ITL_BASE"
 SUPPORTED_VLLM_VERSION = "0.15.1"

@@ -131,7 +131,9 @@ by `VllmITLBaseProposer` at runtime.
 - `--itl-base-draft-tp-rank`: local tensor-parallel rank that loads and runs
   the HF draft model. Default: `0`; keep this at `0` for vLLM runtimes that
   use message-queue object broadcast.
-- `--no-itl-base-draft-cache`: disable draft KV cache reuse.
+- `--no-itl-base-draft-cache`: disable draft KV cache reuse. Use this only as
+  a diagnostic fallback; the normal serving path should keep draft cache
+  enabled.
 - `--itl-base-log-proposals`: log proposal length and cache events.
 
 Environment variables with the same names are also supported, using the
@@ -168,6 +170,9 @@ with:
 - temperature: `0` for the first benchmark pass
 - `--generation-config vllm` to avoid model-card sampling defaults changing
   the benchmark
+- keep draft cache enabled unless you are isolating a cache correctness issue.
+  With `--itl-base-log-proposals`, cache events should show `hit`, `extend`, or
+  `rebuild` while acceptance remains close to the no-cache diagnostic run.
 
 Use `tli` when the workload is sampling-heavy and the draft/target tokenizers
 have a useful token-level intersection. If vLLM logs show `Avg Draft acceptance

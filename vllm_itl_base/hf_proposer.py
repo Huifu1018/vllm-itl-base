@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -400,6 +401,7 @@ class HeterogeneousDraftProposer:
             and context_ids[: len(cached.input_ids)] == cached.input_ids
         ):
             suffix = context_ids[len(cached.input_ids) :]
+            past_key_values = self._fork_past_key_values(cached.past_key_values)
             suffix_tensor = torch.tensor(
                 [list(suffix)],
                 dtype=torch.long,
@@ -414,7 +416,7 @@ class HeterogeneousDraftProposer:
                 outputs = self.draft_model(
                     input_ids=suffix_tensor,
                     attention_mask=attention_mask,
-                    past_key_values=cached.past_key_values,
+                    past_key_values=past_key_values,
                     use_cache=True,
                 )
             state = DraftRequestState(
@@ -524,16 +526,45 @@ class HeterogeneousDraftProposer:
 
 
 def _clone_cache(value):
-    if hasattr(value, "to_legacy_cache"):
-        return value
+    return _clone_cache_for_reuse(value)
+
+
+def _clone_nested_tensors(value):
+    import torch
+
+    if torch.is_tensor(value):
+        return value.clone()
     if isinstance(value, tuple):
-        return tuple(_clone_cache(item) for item in value)
+        return tuple(_clone_nested_tensors(item) for item in value)
     if isinstance(value, list):
-        return [_clone_cache(item) for item in value]
+        return [_clone_nested_tensors(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _clone_nested_tensors(item) for key, item in value.items()}
     clone = getattr(value, "clone", None)
     if callable(clone):
         return clone()
     return value
+
+
+def _clone_cache_for_reuse(value):
+    try:
+        return copy.deepcopy(value)
+    except Exception:
+        pass
+
+    to_legacy_cache = getattr(value, "to_legacy_cache", None)
+    from_legacy_cache = getattr(type(value), "from_legacy_cache", None)
+    if callable(to_legacy_cache) and callable(from_legacy_cache):
+        legacy_cache = _clone_nested_tensors(to_legacy_cache())
+        try:
+            return from_legacy_cache(legacy_cache)
+        except Exception:
+            logger.debug(
+                "Could not clone HF cache object from legacy cache.",
+                exc_info=True,
+            )
+
+    return _clone_nested_tensors(value)
 
 
 def _torch_dtype(torch, dtype_name: str):
