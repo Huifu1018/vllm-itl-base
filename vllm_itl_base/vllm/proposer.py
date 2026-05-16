@@ -26,6 +26,13 @@ class _TargetRuntime:
     max_model_len: int
 
 
+@dataclass(frozen=True)
+class _TPRuntime:
+    rank: int
+    world_size: int
+    group: Any | None
+
+
 class VllmITLBaseProposer:
     """Drop-in replacement for vLLM 0.15.1 ``NgramProposer``.
 
@@ -49,15 +56,50 @@ class VllmITLBaseProposer:
                 "vllm-itl-base-serve --itl-base-draft-model ..."
             )
 
+        self.tp_runtime = _detect_tp_runtime()
+        if self.config.draft_tp_rank >= self.tp_runtime.world_size:
+            raise ValueError(
+                "VLLM_ITL_BASE_DRAFT_TP_RANK must be smaller than tensor "
+                f"parallel size ({self.config.draft_tp_rank} >= "
+                f"{self.tp_runtime.world_size})."
+            )
+        if (
+            self.tp_runtime.world_size > 1
+            and self.config.draft_tp_rank != 0
+            and getattr(self.tp_runtime.group, "mq_broadcaster", None) is not None
+        ):
+            raise ValueError(
+                "This vLLM TP runtime supports object broadcast only from TP "
+                "rank 0; set VLLM_ITL_BASE_DRAFT_TP_RANK=0."
+            )
+        self._runs_draft_model = self.tp_runtime.rank == self.config.draft_tp_rank
         self.target_runtime = self._build_target_runtime(vllm_config)
-        self.target_tokenizer = self._load_target_tokenizer()
+        self.target_tokenizer = (
+            self._load_target_tokenizer() if self._runs_draft_model else None
+        )
         self._hf_proposer: HeterogeneousDraftProposer | None = None
         self._draft_probs_by_req_id: dict[str, list[Any]] = {}
         self._target_ids_by_req_id: dict[str, list[int]] = {}
         self._last_methods_by_req_id: dict[str, str] = {}
+        if self._runs_draft_model:
+            logger.info(
+                "ITL_BASE TP rank %s/%s will run draft model %s.",
+                self.tp_runtime.rank,
+                self.tp_runtime.world_size,
+                self.config.draft_model,
+            )
+        elif self.tp_runtime.world_size > 1:
+            logger.info(
+                "ITL_BASE TP rank %s/%s will receive draft proposals from "
+                "TP rank %s; local draft model load is skipped.",
+                self.tp_runtime.rank,
+                self.tp_runtime.world_size,
+                self.config.draft_tp_rank,
+            )
 
     def load_model(self, *args: Any, **kwargs: Any) -> None:
-        self._ensure_hf_proposer()
+        if self._runs_draft_model:
+            self._ensure_hf_proposer()
 
     def propose(
         self,
@@ -68,14 +110,56 @@ class VllmITLBaseProposer:
         sampling_metadata: Any = None,
         req_ids: Sequence[str] | None = None,
     ) -> list[list[int]]:
-        proposer = self._ensure_hf_proposer()
         req_ids = list(req_ids or [f"row:{i}" for i in range(len(sampled_token_ids))])
+        if self._runs_draft_model:
+            try:
+                draft_token_ids = self._propose_local(
+                    sampled_token_ids,
+                    num_tokens_no_spec,
+                    token_ids_cpu,
+                    sampling_metadata=sampling_metadata,
+                    req_ids=req_ids,
+                )
+                payload = self._export_payload(req_ids, draft_token_ids)
+            except Exception as exc:
+                if self.tp_runtime.world_size > 1:
+                    self._broadcast_payload(
+                        {
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "draft_token_ids": [],
+                        }
+                    )
+                raise
+        else:
+            payload = None
+
+        payload = self._broadcast_payload(payload)
+        if isinstance(payload, dict) and "error" in payload:
+            raise RuntimeError(
+                "ITL_BASE proposal failed on draft TP rank "
+                f"{self.config.draft_tp_rank}: {payload['error']}"
+            )
+        if self._runs_draft_model:
+            return draft_token_ids
+        return self._apply_payload(req_ids, payload)
+
+    def _propose_local(
+        self,
+        sampled_token_ids: list[list[int]],
+        num_tokens_no_spec: Any,
+        token_ids_cpu: Any,
+        *,
+        sampling_metadata: Any = None,
+        req_ids: Sequence[str],
+    ) -> list[list[int]]:
+        proposer = self._ensure_hf_proposer()
         draft_token_ids: list[list[int]] = []
 
         for index, sampled_ids in enumerate(sampled_token_ids):
             req_id = str(req_ids[index])
             self._draft_probs_by_req_id.pop(req_id, None)
             self._target_ids_by_req_id.pop(req_id, None)
+            self._last_methods_by_req_id.pop(req_id, None)
 
             if not sampled_ids:
                 draft_token_ids.append([])
@@ -86,7 +170,10 @@ class VllmITLBaseProposer:
                 draft_token_ids.append([])
                 continue
 
-            max_target_tokens = min(self.k, self.target_runtime.max_model_len - num_tokens)
+            max_target_tokens = min(
+                self.k,
+                self.target_runtime.max_model_len - num_tokens,
+            )
             if max_target_tokens <= 0:
                 draft_token_ids.append([])
                 continue
@@ -123,6 +210,83 @@ class VllmITLBaseProposer:
             draft_token_ids.append(target_ids)
 
         return draft_token_ids
+
+    def _export_payload(
+        self,
+        req_ids: Sequence[str],
+        draft_token_ids: list[list[int]],
+    ) -> dict[str, Any]:
+        req_id_set = {str(req_id) for req_id in req_ids}
+        return {
+            "draft_token_ids": [
+                [int(token_id) for token_id in row] for row in draft_token_ids
+            ],
+            "draft_probs_by_req_id": {
+                req_id: [_tensor_to_cpu(row) for row in rows]
+                for req_id, rows in self._draft_probs_by_req_id.items()
+                if req_id in req_id_set
+            },
+            "target_ids_by_req_id": {
+                req_id: [int(token_id) for token_id in token_ids]
+                for req_id, token_ids in self._target_ids_by_req_id.items()
+                if req_id in req_id_set
+            },
+            "last_methods_by_req_id": {
+                req_id: str(method)
+                for req_id, method in self._last_methods_by_req_id.items()
+                if req_id in req_id_set
+            },
+        }
+
+    def _apply_payload(
+        self,
+        req_ids: Sequence[str],
+        payload: Any,
+    ) -> list[list[int]]:
+        if not isinstance(payload, dict):
+            raise RuntimeError("ITL_BASE TP broadcast did not return a proposal payload.")
+
+        for req_id in (str(req_id) for req_id in req_ids):
+            self._draft_probs_by_req_id.pop(req_id, None)
+            self._target_ids_by_req_id.pop(req_id, None)
+            self._last_methods_by_req_id.pop(req_id, None)
+
+        self._draft_probs_by_req_id.update(
+            {
+                str(req_id): list(rows)
+                for req_id, rows in payload.get("draft_probs_by_req_id", {}).items()
+            }
+        )
+        self._target_ids_by_req_id.update(
+            {
+                str(req_id): [int(token_id) for token_id in token_ids]
+                for req_id, token_ids in payload.get("target_ids_by_req_id", {}).items()
+            }
+        )
+        self._last_methods_by_req_id.update(
+            {
+                str(req_id): str(method)
+                for req_id, method in payload.get("last_methods_by_req_id", {}).items()
+            }
+        )
+        return [
+            [int(token_id) for token_id in row]
+            for row in payload.get("draft_token_ids", [])
+        ]
+
+    def _broadcast_payload(self, payload: dict[str, Any] | None) -> dict[str, Any]:
+        if self.tp_runtime.world_size == 1:
+            assert payload is not None
+            return payload
+        if self.tp_runtime.group is None:
+            raise RuntimeError(
+                "ITL_BASE detected tensor parallelism but could not access the "
+                "vLLM TP communication group."
+            )
+        return self.tp_runtime.group.broadcast_object(
+            payload,
+            src=self.config.draft_tp_rank,
+        )
 
     def take_draft_probs(
         self,
@@ -205,6 +369,11 @@ class VllmITLBaseProposer:
         self._draft_probs_by_req_id[str(req_id)] = row_list
 
     def _ensure_hf_proposer(self) -> HeterogeneousDraftProposer:
+        if self.target_tokenizer is None:
+            raise RuntimeError(
+                "ITL_BASE draft proposer was requested on a TP rank that is not "
+                "configured to run the draft model."
+            )
         if self._hf_proposer is None:
             logger.info(
                 "Loading ITL_BASE draft model %s for target tokenizer %s.",
@@ -316,6 +485,33 @@ def _one_hot_prob_row(token_id: int, *, vocab_size: int, device: Any) -> Any:
     if 0 <= token_id < vocab_size:
         row[token_id] = 1.0
     return row
+
+
+def _tensor_to_cpu(row: Any) -> Any:
+    detach = getattr(row, "detach", None)
+    if callable(detach):
+        return detach().cpu().float().contiguous()
+    return row
+
+
+def _detect_tp_runtime() -> _TPRuntime:
+    try:
+        from vllm.distributed import (  # type: ignore
+            get_tensor_model_parallel_rank,
+            get_tensor_model_parallel_world_size,
+            get_tp_group,
+        )
+    except Exception:
+        return _TPRuntime(rank=0, world_size=1, group=None)
+
+    try:
+        rank = int(get_tensor_model_parallel_rank())
+        world_size = int(get_tensor_model_parallel_world_size())
+        group = get_tp_group() if world_size > 1 else None
+        return _TPRuntime(rank=rank, world_size=world_size, group=group)
+    except Exception:
+        logger.debug("Could not detect vLLM tensor-parallel runtime.", exc_info=True)
+        return _TPRuntime(rank=0, world_size=1, group=None)
 
 
 def _tokenizer_len(tokenizer_id: str, trust_remote_code: bool) -> int:

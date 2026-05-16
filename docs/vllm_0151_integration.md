@@ -14,6 +14,9 @@ The package installs a `vllm.general_plugins` entry point and a launcher:
 - The plugin replaces vLLM's `NgramProposer` with `VllmITLBaseProposer`.
 - For TLI, the plugin also patches `GPUModelRunner._sample` so draft
   probability rows are passed to vLLM's existing rejection sampler.
+- With tensor parallelism, only `VLLM_ITL_BASE_DRAFT_TP_RANK` loads and runs
+  the HF draft model. The translated draft tokens and TLI probability rows are
+  broadcast with vLLM's TP communication group.
 
 Supported routes:
 

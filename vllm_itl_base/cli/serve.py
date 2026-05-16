@@ -60,6 +60,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--itl-base-draft-device", default=None)
     parser.add_argument("--itl-base-draft-device-map", default=None)
     parser.add_argument("--itl-base-draft-dtype", default=None)
+    parser.add_argument("--itl-base-draft-tp-rank", type=int, default=None)
     parser.add_argument("--itl-base-assistant-lookbehind", type=int, default=None)
     parser.add_argument("--itl-base-target-lookbehind", type=int, default=None)
     parser.add_argument("--itl-base-max-cached-requests", type=int, default=None)
@@ -100,6 +101,7 @@ def _set_env_from_args(args: argparse.Namespace, draft_model: str) -> None:
         "VLLM_ITL_BASE_DRAFT_DEVICE_MAP", args.itl_base_draft_device_map
     )
     _set_env_if_not_none("VLLM_ITL_BASE_DRAFT_DTYPE", args.itl_base_draft_dtype)
+    _set_env_if_not_none("VLLM_ITL_BASE_DRAFT_TP_RANK", args.itl_base_draft_tp_rank)
     _set_env_if_not_none(
         "VLLM_ITL_BASE_ASSISTANT_LOOKBEHIND",
         args.itl_base_assistant_lookbehind,

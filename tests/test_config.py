@@ -15,6 +15,15 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 BaseVLLMConfig.from_env()
 
+    def test_draft_tp_rank_from_env(self):
+        with patch.dict("os.environ", {"VLLM_ITL_BASE_DRAFT_TP_RANK": "2"}):
+            self.assertEqual(BaseVLLMConfig.from_env().draft_tp_rank, 2)
+
+    def test_draft_tp_rank_rejects_negative_values(self):
+        with patch.dict("os.environ", {"VLLM_ITL_BASE_DRAFT_TP_RANK": "-1"}):
+            with self.assertRaises(ValueError):
+                BaseVLLMConfig.from_env()
+
 
 if __name__ == "__main__":
     unittest.main()

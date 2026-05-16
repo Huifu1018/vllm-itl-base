@@ -49,10 +49,12 @@ vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
   --host 0.0.0.0 \
   --port 8000 \
   --trust-remote-code \
-  --tensor-parallel-size 8 \
+  --generation-config vllm \
+  --tensor-parallel-size 4 \
   --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct \
+  --itl-base-draft-tp-rank 0 \
   --itl-base-method slem \
-  --itl-base-num-speculative-tokens 5
+  --itl-base-num-speculative-tokens 2
 ```
 
 Sampling-oriented TLI example:
@@ -62,10 +64,12 @@ vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
   --host 0.0.0.0 \
   --port 8000 \
   --trust-remote-code \
-  --tensor-parallel-size 8 \
+  --generation-config vllm \
+  --tensor-parallel-size 4 \
   --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct \
+  --itl-base-draft-tp-rank 0 \
   --itl-base-method tli \
-  --itl-base-num-speculative-tokens 4
+  --itl-base-num-speculative-tokens 2
 ```
 
 `auto` mode:
@@ -73,12 +77,16 @@ vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
 ```bash
 vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
   --trust-remote-code \
-  --tensor-parallel-size 8 \
+  --generation-config vllm \
+  --tensor-parallel-size 4 \
   --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct \
   --itl-base-method auto
 ```
 
 `auto` uses SLEM for all-greedy batches and TLI for non-greedy batches.
+When tensor parallelism is enabled, only the configured draft TP rank runs the
+HF draft model; the proposal tokens and TLI probability rows are broadcast to
+the other TP ranks.
 
 ## How Arguments Work
 
@@ -114,6 +122,9 @@ by `VllmITLBaseProposer` at runtime.
 - `--itl-base-draft-device-map`: pass a Transformers `device_map`, for example
   `auto`.
 - `--itl-base-draft-dtype`: `auto`, `float16`, `bfloat16`, or `float32`.
+- `--itl-base-draft-tp-rank`: local tensor-parallel rank that loads and runs
+  the HF draft model. Default: `0`; keep this at `0` for vLLM runtimes that
+  use message-queue object broadcast.
 - `--no-itl-base-draft-cache`: disable draft KV cache reuse.
 - `--itl-base-log-proposals`: log proposal length and cache events.
 
@@ -145,17 +156,21 @@ with:
 
 - method: `slem`
 - draft: `Qwen/Qwen2.5-1.5B-Instruct` or another small instruction model
-- `num_speculative_tokens`: `4` or `5`
+- `num_speculative_tokens`: `2` or `3` until acceptance is stable
 - temperature: `0` for the first benchmark pass
+- `--generation-config vllm` to avoid model-card sampling defaults changing
+  the benchmark
 
 Use `tli` when the workload is sampling-heavy and the draft/target tokenizers
-have a useful token-level intersection.
+have a useful token-level intersection. If vLLM logs show `Avg Draft acceptance
+rate: 0.0%`, disable TLI for that draft/target pair or switch to SLEM.
 
 ## Limitations
 
 - This package is tied to vLLM `0.15.1` internals.
 - The draft model is loaded through Hugging Face Transformers, separate from
-  vLLM's target model executor.
+  vLLM's target model executor. Under tensor parallelism it is loaded only on
+  `--itl-base-draft-tp-rank`.
 - TLI stores full target-vocabulary probability rows for draft positions; use a
   modest `num_speculative_tokens` for very large vocabularies.
 - SLEM quality depends strongly on tokenizer alignment and draft model quality.
