@@ -52,9 +52,11 @@ vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
   --generation-config vllm \
   --tensor-parallel-size 4 \
   --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct \
+  --itl-base-draft-device cuda:0 \
   --itl-base-draft-tp-rank 0 \
   --itl-base-method slem \
-  --itl-base-num-speculative-tokens 2
+  --itl-base-num-speculative-tokens 2 \
+  --itl-base-max-context-tokens 2048
 ```
 
 Sampling-oriented TLI example:
@@ -67,9 +69,11 @@ vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
   --generation-config vllm \
   --tensor-parallel-size 4 \
   --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct \
+  --itl-base-draft-device cuda:0 \
   --itl-base-draft-tp-rank 0 \
   --itl-base-method tli \
-  --itl-base-num-speculative-tokens 2
+  --itl-base-num-speculative-tokens 2 \
+  --itl-base-max-context-tokens 2048
 ```
 
 `auto` mode:
@@ -80,6 +84,7 @@ vllm-itl-base-serve nvidia/MiniMax-M2.7-NVFP4 \
   --generation-config vllm \
   --tensor-parallel-size 4 \
   --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct \
+  --itl-base-draft-device cuda:0 \
   --itl-base-method auto
 ```
 
@@ -118,7 +123,8 @@ by `VllmITLBaseProposer` at runtime.
 - `--itl-base-assistant-lookbehind`: assistant-token context window for SLEM.
 - `--itl-base-target-lookbehind`: target-token suffix window for SLEM.
 - `--itl-base-draft-device`: move the HF draft model to a device, for example
-  `cuda:0`.
+  `cuda:0`. If this and `--itl-base-draft-device-map` are omitted,
+  Transformers normally leaves the draft on CPU, which is too slow for serving.
 - `--itl-base-draft-device-map`: pass a Transformers `device_map`, for example
   `auto`.
 - `--itl-base-draft-dtype`: `auto`, `float16`, `bfloat16`, or `float32`.
@@ -157,6 +163,8 @@ with:
 - method: `slem`
 - draft: `Qwen/Qwen2.5-1.5B-Instruct` or another small instruction model
 - `num_speculative_tokens`: `2` or `3` until acceptance is stable
+- `--itl-base-draft-device cuda:0`, or another visible GPU/spare GPU
+- `--itl-base-max-context-tokens 2048` for the first benchmark pass
 - temperature: `0` for the first benchmark pass
 - `--generation-config vllm` to avoid model-card sampling defaults changing
   the benchmark

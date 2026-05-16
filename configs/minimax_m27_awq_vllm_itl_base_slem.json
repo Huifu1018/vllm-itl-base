@@ -4,8 +4,11 @@
   "engine": "vllm",
   "vllm_version": "0.15.1",
   "method": "slem",
-  "num_speculative_tokens": 5,
+  "num_speculative_tokens": 2,
   "assistant_lookbehind": 10,
   "target_lookbehind": 10,
-  "serve_example": "vllm-itl-base-serve MiniMax-M2.7-AWQ-4bit --trust-remote-code --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct --itl-base-method slem --itl-base-num-speculative-tokens 5"
+  "draft_device": "cuda:0",
+  "draft_tp_rank": 0,
+  "max_context_tokens": 2048,
+  "serve_example": "vllm-itl-base-serve MiniMax-M2.7-AWQ-4bit --trust-remote-code --generation-config vllm --tensor-parallel-size 4 --itl-base-draft-model Qwen/Qwen2.5-1.5B-Instruct --itl-base-draft-device cuda:0 --itl-base-draft-tp-rank 0 --itl-base-method slem --itl-base-num-speculative-tokens 2 --itl-base-max-context-tokens 2048"
 }

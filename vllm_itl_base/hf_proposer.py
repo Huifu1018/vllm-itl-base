@@ -112,6 +112,13 @@ class HeterogeneousDraftProposer:
         )
         if not config.draft_device_map and config.draft_device:
             self.draft_model.to(config.draft_device)
+        elif not config.draft_device_map:
+            logger.warning(
+                "ITL_BASE draft model is using the Transformers default device. "
+                "This is usually CPU and will be slow; pass "
+                "--itl-base-draft-device cuda:0 or --itl-base-draft-device-map auto "
+                "for GPU serving."
+            )
         self.draft_model.eval()
 
         self.intersection: VocabIntersection | None = None
